@@ -109,7 +109,7 @@ def plot_rms(rms_list, runs, bias="Unbiased"):
         Plots in 1D the walker's distance from origin over time.
     """
     plt.plot(rms_list)
-    plt.title(f"{bias} Distance from Origin in 3D Random Walk: {len(rms_list) - 1} Steps, {runs} Runs")
+    plt.title(f"{bias} RMS Distance in 3D Random Walk: {len(rms_list) - 1} Steps, {runs} Runs")
     plt.xlabel('Steps')
     plt.ylabel('Distance from Origin')
     plt.show()
