@@ -33,7 +33,7 @@ def rand_yield(dim, n):
     """
     yield from np.random.random((n,dim))
 
-def walk(dim, steps, reps, bias=False):
+def walk(dim, steps, probs):
     """
         parameters:
             dim (int):  dimensions in walk
@@ -47,26 +47,40 @@ def walk(dim, steps, reps, bias=False):
 
         Returns the average of 'reps' repitions of the walk.
     """
-    probs = np.full((dim,2) , 0.5)        # Equal probability in every direction
+    pos = [[0] * dim]
+    for step in rand_yield(dim, steps):
+        pos.append([(pos[-1][i] + (step[i] > probs[i][0]) - (step[i] < probs[i][1])) for i in range(dim)])
 
-    if bias:
-        probs = [[0.7, 0.3], [0.7, 0.3], [0.7, 0.3]]
+    return(pos)
 
 
-    for rep in range(reps):
-        pos = [[0] * dim]
-        for step in rand_yield(dim, steps):
-            pos.append([(pos[-1][i] + (step[i] > probs[i][0]) - (step[i] < probs[i][1])) for i in range(dim)])
 
-        if rep == 0:
-            avg_pos = pos
+def get_dist(pos_list):
+    """
+        Calculates distances from origin of a list of
+        n-dimensional coordinates
 
-        avg_pos = np.mean( np.array([avg_pos, pos]), axis=0 )
+    """
+    return([ np.sqrt(np.sum(list(map(lambda m: m**2, p)))) for p in pos_list ])
 
-    return(avg_pos)
 
-def get_rms(avg_pos):
-    return( [ np.sqrt(np.mean(p**2)) for p in avg_pos ] )
+
+def get_rms(pos_list):
+    """
+        RMS distance from origin based on distance list
+    """
+    sq_dist_list = np.array(get_dist(pos_list))**2      # all distances squared
+    rms_list = [ sq_dist_list[0] ]
+
+    for i in range(1, len(sq_dist_list)):
+        rms_list.append( (rms_list[i-1] + sq_dist_list[i]) )
+
+    for i in range(1, len(sq_dist_list)):
+        rms_list[i] /= (i + 1)
+
+    return(np.sqrt(rms_list))
+
+
 
 def plot_walk(arr, runs, bias="Unbiased"):
     """
@@ -85,6 +99,8 @@ def plot_walk(arr, runs, bias="Unbiased"):
     ax.set_zlabel('z')
     plt.show()
 
+
+
 def plot_rms(rms_list, runs, bias="Unbiased"):
     """
         parameters:
@@ -99,6 +115,24 @@ def plot_rms(rms_list, runs, bias="Unbiased"):
     plt.show()
 
 
+
+def sim(dim, steps, runs, bias=False):
+
+    probs = np.full((dim,2) , 0.5)        # Equal probability in every direction
+
+    if bias:
+        probs = [[0.7, 0.3], [0.7, 0.3], [0.7, 0.3]]
+
+    rms_list = np.zeros(steps + 1)
+
+    for run in range(runs):
+        rms_list += get_rms(walk(dim, steps, probs))
+
+    rms_list /= runs
+
+    return(rms_list)
+
+
 ####################################
 # Main
 ####################################
@@ -106,17 +140,15 @@ def plot_rms(rms_list, runs, bias="Unbiased"):
 DIMENSIONS = 3
 RUNS = 1000
 STEPS = 100
+bias = True
 
 #pos, rms = walk(DIMENSIONS, STEPS, RUNS)
 #plot_walk(pos)
 #plot_rms(rms)
 
-pos = walk(DIMENSIONS, STEPS, RUNS)
-rms = get_rms(pos)
-print(pos)
+rms = sim(DIMENSIONS, STEPS, RUNS, bias=bias)
 print(rms)
-plot_walk(pos, RUNS)
-plot_rms(rms, RUNS)
+plot_rms(rms, RUNS, bias="Biased")
 
 
 
