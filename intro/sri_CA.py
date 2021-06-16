@@ -12,7 +12,7 @@ t_steps = 100
 r_steps = 50
 P = 0.5     # probability that xi = 1
 Q = 0.5     # probability that gamma = 1
-iterations = 100     # number of times we populate a grid
+iterations = 100    # number of times we populate a grid
                     # (number of grids we average over)
 
 
@@ -29,6 +29,14 @@ def initialize(t_max, r_max):
     return grid
 
 def populate(t_max, r_max):
+    """
+        t_max is row number
+        r_max is column number
+
+        Fills grid according to CA rules.
+        Null boundary conditions.
+        Fills rows in order (except last site -- fills second)
+    """
 
     grid = initialize(t_max, r_max)
 
@@ -36,7 +44,7 @@ def populate(t_max, r_max):
 
         # Rules for first, last row sites with null boundary conditions
         grid[t+1, 0] = (Q <= rand.random()) if grid[t][0]\
-        else (P > rand.random()) and grid[t][1]             # FASTER TO USE '*' OR 'and' HERE?
+        else (P > rand.random()) and grid[t][1]
 
         grid[t+1, r_max-1] = (Q <= rand.random()) if grid[t][r_max-1]\
         else (P > rand.random()) and grid[t][r_max-2]
@@ -44,7 +52,7 @@ def populate(t_max, r_max):
         # Rule for all sites with 2 neighbors
         for i in range(1,r_max-1):
             grid[t+1, i] = (Q <= rand.random()) if grid[t][i]\
-            else (P > rand.random()) and (grid[t][i+1] + grid[t][i-1])
+            else (P > rand.random()) and (grid[t][i+1] or grid[t][i-1])
 
     return(grid)
 
@@ -61,15 +69,20 @@ def aggregate(t_max, r_max, iters):
 
 def map_grid(grid, iters):
 
-    #cmap = mpl.colors.ListedColormap(['blue','black'])
-    c = plt.pcolormesh(grid)
+    c = plt.pcolormesh(grid, cmap='Greys', norm=mpl.colors.LogNorm())   # can also get rid of log norm maybe
     plt.colorbar(c)
     plt.title(f'CA Averaged over {iters} Runs')
     plt.show()
 
-start_time = time.time()
-map_grid(aggregate(t_steps, r_steps, iterations))
-end_time = time.time()
+
+# start_time = time.time()
+
+map_grid(aggregate(t_steps, r_steps, iterations), iterations)
+
+# end_time = time.time()
+
+
+# print(f"Time with 'or': {end_time - start_time}")
 
 
 
