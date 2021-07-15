@@ -12,6 +12,7 @@ import os
 import sys
 
 path = 'Data/Percolation/'
+np.set_printoptions(threshold=sys.maxsize)
 
 #Helper functions
 def shift(offset,arr):
@@ -46,6 +47,15 @@ def initial_state(steps, L):
     state = np.zeros((steps, L))
     state[0, int(L/2)] = 1
     return state
+
+def initial_prop_matrix(p, period, L):
+    # period == tau (periodicity of floquet system)
+    propagation_matrix = np.random.RandomState().binomial(1, p, (period, L))
+    return propagation_matrix
+
+def initial_death_matrix(t, period, L):
+    death_matrix = np.random.RandomState().binomial(1, t, (period, L))
+    return death_matrix
 
 def update(state, timestep, p, t):
     # timestep is the row we want to update ie t+1
@@ -93,6 +103,20 @@ def update_indt(state, timestep, p, death_list):
     state[timestep] = state[timestep-1] + propagation_term + death_term
     return state
 
+def update_floquet(state, timestep, p_matrix, t_matrix):
+    L = len(state[0])
+    period = len(p_matrix)
+
+    length_term_left, length_term_right = shift(1,state[timestep-1]), shift(-1,state[timestep-1])
+    length_term = length_term_left + length_term_right - length_term_left*length_term_right
+
+    propagation_term = p_matrix[timestep % period]*(1 - state[timestep-1])*length_term
+    death_term = -1*t_matrix[timestep % period]*state[timestep-1]
+
+    state[timestep] = state[timestep-1] + propagation_term + death_term
+    return state
+
+
 def evolution(steps, L, p, t, run_number):
     print('World: ', run_number)
     sys.stdout.flush()
@@ -129,7 +153,20 @@ def evolution_indt(steps, L, p, t, run_number):
 
     return state
 
-def simulation_parallel(steps, L, p, t, runs, indp=False, indt=False, g=1.0):
+def evolution_floquet(steps, L, p, t, period, run_number):
+    print('World: ', run_number)
+    sys.stdout.flush()
+
+    p_matrix = initial_prop_matrix(p, period, L)
+    t_matrix = initial_death_matrix(t, period, L)
+    state = initial_state(steps, L)
+
+    for i in range(1,steps):
+        state = update_floquet(state, i, p_matrix, t_matrix)
+
+    return state
+
+def simulation_parallel(steps, L, p, t, runs, indp=False, indt=False, g=1.0, floquet=False, period=10):
     state_database = np.zeros((steps,L))
 
     batch_size = mp.cpu_count()
@@ -143,6 +180,8 @@ def simulation_parallel(steps, L, p, t, runs, indp=False, indt=False, g=1.0):
                 results = pool.map(partial(evolution_indp, steps, L, p, t, g=g), arguments_list)
             elif indt:
                 results = pool.map(partial(evolution_indt, steps, L, p, t), arguments_list)
+            elif floquet:
+                results = pool.map(partial(evolution_floquet, steps, L, p, t, period), arguments_list)
             else:
                 results = pool.map(partial(evolution, steps, L, p, t), arguments_list)
 
@@ -156,19 +195,14 @@ def simulation_parallel(steps, L, p, t, runs, indp=False, indt=False, g=1.0):
     #Data Storage
     if indp:
         filename = 'indp_g=' + str(g) + '_t=' + str(t) + '_p=' + str(p)
+    elif floquet:
+        filename = f'floquet_tau={period}_t={t}_p={p}'
     else:
         filename = 't=' + str(t) + '_p=' + str(p)
     state_sparse = scipy.sparse.csr_matrix(state_database)
     save_sparse(path + filename, state_sparse)
     return None
 
-def generate_g_variation(steps, L, t, runs):
-    g_list = np.linspace(0,1,11)
-    p_list = np.linspace(0,1,11)
-
-    for p in p_list:
-        for g in g_list:
-            simulation_parallel(steps, L, p, t, runs, indp=True, g=g)
 
 #ANALYSIS
 def analyse_saturation(t):
@@ -269,9 +303,10 @@ def analyse_velocity(t):
 
         file_name = 't=' + str(t) + '_p=' + str(p_list[i])
         state_database = load_sparse(path + 'Data/' + file_name)
-        steps, L = len(state_database), len(state_database)
+        steps, L = len(state_database), len(state_database[0])
 
-        equilibrium_value = np.mean(state_database[-10:, int(len(state_database[0])/2) - 10:int(len(state_database[0])/2) + 10])
+        origin = int(L/2)
+        equilibrium_value = np.mean(state_database[-10: , origin - 10 : origin + 10])
 
         if equilibrium_value == 0.0: #no light cone will have no butterfly velocity
             print('No light cone')
@@ -402,45 +437,48 @@ def analyse_broadening(t):
     data[0], data[1], data[2] = p_list, diffusion_list, diffusion_error_list
     np.savetxt(path + file_name + '.txt', data)
 
-def analyse_front(t,p,g_list):
-    # first pass to obtain values of p
-    # g_list = []
-    file_name_check = 'p=' + str(p)
+def analyse_front(p, t, indp=False, g=1.0, floquet=False, tau=10):
 
-    """
-    for file in os.listdir(path):
-        if 'g=' in file:
-            if file_name_check in file:
-                file_index_start, file_index_end = file.index('g') + 2, file.index('_t=')
-                g = float(file[file_index_start:file_index_end])
-                g_list.append(g)
-    g_list = np.array(g_list)
-    """
+    print(f'Finding front for p={p}, t={t}')
 
-    for i in range(len(g_list)):
-        print('Finding front for g = ', g_list[i])
+    if indp:
+        file_name = f'indp_g={g}_t={t}_p={p}.npz'
+    elif floquet:
+        file_name = f'floquet_tau={tau}_t={t}_p={p}.npz'
+    else:
+        file_name = f't={t}_p={p}.npz'
 
-        file_name = 't=' + str(t) + '_p=' + str(g_list[i]) + '.npz'
-        file_name = 'indp_g=' + str(g_list[i]) + '_t=' +str(t) + '_p=' + str(p) + '.npz'
+    if file_name in os.listdir(path):
         state_database = load_sparse(path + '/' + file_name)
-        steps, L = len(state_database), len(state_database[0])
-        origin = int(L/2)
+    else:
+        print(f'{file_name} not found in {path}')
+        return None
 
-        bulk_equilibrium = np.mean(state_database[-100:, origin])
-        front = bulk_equilibrium / 2
-        print(f"front value: {front}")
-
-        results = state_database - front
-        results = np.where(state_database < front, 100, state_database)
-        #results = np.where(results > 0, 1, results)
-        #edges = np.abs(np.diff(results, axis=1)) > 0
+    steps, L = len(state_database), len(state_database[0])
+    origin = int(L/2)
+    bulk_equilibrium = np.mean(state_database[-10:, (origin-10):(origin+10)])
+    front = bulk_equilibrium / 2
 
 
-        #Data Storage
-        filename = 'front_database_p=' + str(p) + '_t=' + str(t) + '_g=' + str(g_list[i])
-        state_sparse = scipy.sparse.csr_matrix(results)
-        save_sparse(path + filename, state_sparse)
-    return None
+    above_front = np.where(state_database < front, 0, state_database)
+
+    try:
+        front_indices_list = np.array([(np.nonzero(line)[0][0], np.nonzero(line)[0][-1]) for line in above_front])
+
+        if indp:
+            file_name = f'indp_front_g={g}_t={t}_p={p}'
+        elif floquet:
+            file_name = f'floquet_front={tau}_t={t}_p={p}'
+        else:
+            file_name = f'front_t={t}_p={p}'
+
+        np.save(path + '/Fronts/' + file_name, front_indices_list)
+        # Automatically adds '.npy' extension
+
+    except IndexError:
+        print(f"No front found for p={p}, t={t}")
+        return None
+
 
 
 # IN PROGRESS
@@ -461,72 +499,180 @@ def analyse_g_variation(t=0.9):
 
 
 # Plots
-def map_evolution(grid, runs, p, q, front=False):
-
-    cmap = plt.get_cmap('Greys')
-    cmap.set_bad(color = 'r', alpha = 1.)
-    cmap.set_under('w')
-
-    c = plt.pcolormesh(grid, cmap=cmap, vmin=0)
-    c.cmap.set_under()
-    plt.colorbar(c)
-    plt.title(f'CA Averaged over {runs} Runs (p = {p}, t = {q})')
-    if front:
-        plt.savefig(f'Graphs/frontCA_{str(p)}p_{str(q)}q.png')
+def map_evolution(p, t, runs, indp=False, g=1.0, floquet=False, tau=10):
+    if indp:
+        file_name = f'indp_g={g}_t={t}_p={p}.npz'
+    elif floquet:
+        file_name = f'floquet_tau={tau}_t={t}_p={p}.npz'
     else:
-        plt.savefig(f'Graphs/CA_{runs}_{len(grid)}t_{str(p)}p_{str(q)}q.png')
+        file_name = f't={t}_p={p}.npz'
+
+    grid = load_sparse(path + '/' + file_name)
+    cmap = plt.get_cmap('Greys')
+    c = plt.pcolormesh(grid, cmap=cmap, vmin=0)
+    plt.colorbar(c)
+
+    if indp:
+        plt.title(f'CA, {runs} Runs (g={g}, t={t}, p={p})')
+        #plt.savefig(f'Graphs/CA_p={p}_t={t}_g={g}.png')
+    elif floquet:
+        plt.title(f'CA, {runs} Runs, (T={tau}, t={t}, p={p}')
+    else:
+        plt.title(f'CA, {runs} Runs, (t={t}, p={p})')
+        #plt.savefig(f'Graphs/CA_p={p}_t={t}.png')
+
     #plt.show()
     #plt.clf()
 
-def map_front_evolution(grid, runs, p, t, g):
-    cmap = plt.get_cmap('gray')
+def map_front_evolution(grid, runs, p, t, indp, g, floquet, tau):
+    if indp:
+        front_indices_list = np.load(f'{path}/Fronts/indp_front_g={g}_t={t}_p={p}.npy')
+    elif floquet:
+        front_indices_list = np.load(f'{path}/Fronts/floquet_front={tau}_t={t}_p={p}.npy')
+    else:
+        front_indices_list = np.load(f'{path}/Fronts/front_t={t}_p={p}.npy')
 
-    c = plt.pcolormesh(grid, cmap=cmap, vmin=0.18, vmax=1)
-    c.cmap.set_over('w')
-    #c.cmap.set_under('r')
+    # must be for evolution with 1000 steps
+    for i in range(1000):
+        a, b = front_indices_list[i]
+        grid[i][a] = grid[i][b] = -1
+
+    c = plt.pcolormesh(grid, cmap='Greys', vmin=0, vmax=1)
+    c.cmap.set_under('r')
     plt.colorbar(c, extend='min')
 
-    ind = (grid.T > 0.1)
-    plt.title(f'CA (Front), {runs} Runs (g={g}, t={t}, p={p})')
-    #if round(p,2) == 0.90 and round(t,2) == 0.9:
-     #   origin = len(grid[0]) // 2
-      #  plt.xlim([origin - (len(grid[0]) // 20), origin + (len(grid[0]) // 20)])
-    plt.xlim(750,1250)
-    plt.savefig(f'Graphs/frontCA_{runs}_{len(grid)}step_{str(p)}p_{str(t)}t_{str(g)}g.png')
+    if indp:
+        plt.title(f'CA with front, {runs} runs (g={g}, t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_indp_{p}p_{t}t_{g}g.png')
+    elif floquet:
+        plt.title(f'Floquet system with front, {runs} runs (T={tau}, t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_floquet_{p}p_{t}t_{tau}T.png')
+    else:
+        plt.title(f'CA with front, {runs} runs (t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_{p}p_{t}t.png')
+
+    plt.show()
+    plt.clf()
+
+def map_floquet_evolution(grid, runs, p, t, period):
+    c = plt.pcolormesh(grid, cmap='Greys')
+    plt.colorbar(c)
+    plt.title(f"CA Floquet System, {runs} runs (p={p}, t={t}, T={period})")
+    plt.savefig(f'Graphs/floquet_{p}p_{t}t_{period}tau.png')
     #plt.show()
     plt.clf()
 
-def map_both(runs, p, t, g_list):
+def map_both(runs, p, t, g_list, indp_only=False, front_only=False):
 
     for file in os.listdir(path):
 
-        if f"front_database_p={p}_t={t}_g=" in file:
-            g = file[file.index('g=') + 2 : file.index('.npz')]
-            if g in map(lambda x: str(x), g_list):
-                front_grid = load_sparse(path + '/' + file)
-                print(f"Mapping grid ... {file}")
-                map_front_evolution(front_grid, runs, p, t, g)
+        if not indp_only:
+            if f"front_database_p={p}_t={t}_g=" in file:
+                g = file[file.index('g=') + 2 : file.index('.npz')]
+                if g in map(lambda x: str(x), g_list):
+                    front_grid = load_sparse(path + '/' + file)
+                    print(f"Mapping front ... {file}")
+                    map_front_evolution(front_grid, runs, p, t, g)
+        if not front_only:
+            if "indp" in file and f"t={t}_p={p}" in file:
+                g = file[file.index('g=') + 2 : file.index('_t=')]
+                print(f"g = {g} for file: {file}")
+                if g in map(lambda x: str(x), g_list):
+                    grid = load_sparse(path + '/' + file)
+                    print(f"Mapping grid ... {file}")
+                    map_evolution(grid, runs, p, t, g)
+
+def map_floquet(runs, p, t, period):
+    for file in os.listdir(path):
+        if f'floquet_tau={period}_t={t}_p={p}' in file:
+            grid = load_sparse(path + '/' + file)
+            print(f"Mapping grid ... {file}")
+            map_floquet_evolution(grid, runs, p, t, period)
+
+def map_front(p, t, runs, indp=False, g=1.0, floquet=False, tau=10):
+
+    if indp:
+        file_name = f'indp_g={g}_t={t}_p={p}.npz'
+    elif floquet:
+        file_name = f'floquet_tau={tau}_t={t}_p={p}.npz'
+    else:
+        file_name = f't={t}_p={p}.npz'
+
+    if file_name in os.listdir(path):
+        grid = load_sparse(path + '/' + file_name)
+
+    else:
+        print(f'{file_name} not found in {path}')
+        return None
+
+    map_front_evolution(grid, runs, p, t, indp, g, floquet, tau)
+
+def graph_front(p, t, runs, indp=False, g=1.0, floquet=False, tau=10, xlow=0, xhigh=2000):
+
+    if indp:
+        front_indices_list = np.load(f'{path}/Fronts/indp_front_g={g}_t={t}_p={p}.npy')
+    elif floquet:
+        front_indices_list = np.load(f'{path}/Fronts/floquet_front={tau}_t={t}_p={p}.npy')
+    else:
+        front_indices_list = np.load(f'{path}/Fronts/front_t={t}_p={p}.npy')
+
+    # flatten list
+    front_indices_list_L = [a for a,b in front_indices_list]
+    front_indices_list_R = [b for a,b in front_indices_list]
+    x_vals = np.arange(1000)
+
+    plt.plot(front_indices_list_L, x_vals, color='red', linewidth=0.4)
+    plt.plot(front_indices_list_R, x_vals, color='red', linewidth=0.4)
+    plt.xlim(xlow,xhigh)
+    plt.ylim(0,1000)
+    if indp:
+        plt.title(f'CA with front, {runs} runs (g={g}, t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_indp_{p}p_{t}t_{g}g.png')
+    elif floquet:
+        plt.title(f'Floquet system with front, {runs} runs (T={tau}, t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_floquet_{p}p_{t}t_{tau}T.png')
+    else:
+        plt.title(f'CA with front, {runs} runs (t={t}, p={p})')
+        plt.savefig(f'Graphs/frontCA_{p}p_{t}t.png')
+    plt.show()
+
+
 
 # Main
+
+P = 0.9
+T = 20
+RUNS = 100
+
+p_list = [0.4,0.5,0.6]
+t_list = [0.2]
+
 def main_computation():
-    p_list = [0.80]
-    t_list = [0.90]
+
 
     for t in t_list:
-        for p in p_list:
-            for g in np.arange(0, 0.1, 0.01):
-                print(f"Run: {g}")
-                simulation_parallel(1000, 2000, p, t, 100, indp=True, g=g)
+       for p in p_list:
+            print(f"Run: t = {round(t,2)}, p = {round(p,2)}, T = {T}")
+            simulation_parallel(1000, 2000, round(p,2), round(t,2), RUNS, floquet=True, period=T)
+
+    #for period in range(11,14):
+    #simulation_parallel(1000, 2000, round(P,2), round(T,2), RUNS, floquet=True, period=period)
 
 def main_analysis():
-    analyse_front(0.90, 0.80, np.arange(0, 0.1, 0.01))
-
+    #for period in range(11,14):
+    #    analyse_front(P, T, floquet=True, tau=period)
+    for t in t_list:
+        for p in p_list:
+            analyse_front(p,t, floquet=True, tau=T)
 
 if __name__ == "__main__":
 
-    #main_computation()
-    #main_analysis()
+    main_computation()
+    main_analysis()
 
-
-
-    map_both(100, 0.8, 0.9, np.arange(0, 0.1, 0.01))
+    #for period in range(11,14):
+     #   map_front(P, T, RUNS, floquet=True, tau=period)
+    for t in t_list:
+        for p in p_list:
+            map_evolution(p,t,RUNS, floquet=True, tau=T)
+            graph_front(p,t,RUNS, floquet=True, tau=T)
